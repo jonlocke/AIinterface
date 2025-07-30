@@ -233,7 +233,7 @@ void uart_init(void) {
 
     // Reliable baud rate setup
     uint32_t usart_clk = Get_USART1_Clock();
-    uint32_t baud = 115200;
+    uint32_t baud = 2400;
     uint32_t brr = (usart_clk + (baud / 2)) / baud;
     USART1->BRR = brr;
 
@@ -643,8 +643,8 @@ void USART1_IRQHandler(void)
         uint8_t temp = (uint8_t)(USART1->DR & 0xFF);
         //uart_rx_char = temp;
         __DSB(); // Ensure the value is fully written to RAM before system continues
-        //USART1->DR = 'R'; // Echo the char back to terminal - faulty -
-        USART1->DR = temp & 0xFF;
+        //USART1->DR = 'R'; // test char to test uart output 
+        //USART1->DR = temp & 0xFF; // enable for echoing back the char 
     }
 }
 //

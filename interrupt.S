@@ -223,7 +223,8 @@ main_thread_command:
         .word   0x00000000                      // command word
 main_thread_data:
         .word   0x00000000                      // command arg
-
+fc74_busy_flag:
+        .byte 0
 //.section .bss
 //uart_rx_char:
 //        .space 1
@@ -561,12 +562,9 @@ register_0xfc73:
     bne     handle_fc73_read // If read, branch to handler
     b       exit_EXTI0       // On write, exit quickly
 
-handle_fc73_read:
-//#ifdef DEBUG_FC73_READ
-    //vstr     reg_one_s1,[r11,ODR]  // PA0 HIGH
-    // Put the ASCII Char A on the bus for testing to see if it gets to the Elk from here
+handle_fc73_read: // sends data to the electron
     // Assume r1 contains value from uart_rx_char (e.g., 0x41)
-    // Move the char from the uart buffer
+    // Move the char from the uart buffer to electron bus 
     // disble interrupts while sending
     cpsid i
     ldr     r3, =uart_rx_char   // Address of uart_rx_char buffer
@@ -575,7 +573,14 @@ handle_fc73_read:
 
     //bl  uart_buffer_pop_or_null   // returns byte in r0
     //lsls r1, r0, #8               // shift to PD15–8
+    ldr     r4, =20 // Cycles to wait until 2nd half of phi hi.. 30 kinda works
+predelay_loop:
+    subs    r4, r4, #1
+    bne   predelay_loop
 
+#ifdef DEBUG_FC73_READ
+    vstr     reg_one_s1,[r11,ODR]  // PA0 HIGH
+#endif
     lsls r1, r1, #8        // Move to bits 15:8 = Electron D7:D0
     ldr     r0, =0x55550000
     str     r0, [r2, C_TO_D_OFFSET + MODER]  // Set PD15–8 to output
@@ -590,14 +595,16 @@ handle_fc73_read:
 .wait_phi:
     subs    r3, r3, #1
     bne     .wait_phi
-   
     str  r1, [r2, C_TO_D_OFFSET + ODR]  // Write to GPIOD ODR
+#ifdef DEBUG_FC73_READ
+    vstr     reg_zero_s0,[r11,ODR]  // PA0 low 
+#endif
     cpsie i 
     nop
     nop
     nop
 
-    vstr     reg_zero_s0,[r11,ODR]  // set PA0 LOW 
+    //vstr     reg_zero_s0,[r11,ODR]  // set PA0 LOW 
     
     // Clear uart_rx_char
     ldr     r3, =uart_rx_char
@@ -629,7 +636,6 @@ delay_loop:
     //vstr    reg_one_s1, [r3, EMR]   // Re-enable EXTI events for PC0
 
     lsrs    r1, r12, #16   // Restore GPIO D as inputs after PHI0 falls
-//#endif
     dsb
     sev
     wfe
@@ -641,11 +647,18 @@ delay_loop:
 
 .thumb_func
 .global register_0xfc74
-register_0xfc74:
+register_0xfc74:        // Read from the electron 
 
-#ifdef DEBUG_FC74_REG
-    vstr     reg_one_s1,[r11,ODR]  // PA0 HIGH
-#endif
+    // --- Check busy flag ---
+    ldr     r4, =fc74_busy_flag
+    ldrb    r0, [r4]
+    cmp     r0, #1
+    beq     skip_fc74        // Already running? Exit silently
+
+    // --- Set busy flag ---
+    movs    r0, #1
+    strb    r0, [r4]
+
     // Writes data to the UART from the electrons bus
     // GPIOD base = 0x40020C00
     ldr     r2, =0x40020C00
@@ -662,24 +675,35 @@ register_0xfc74:
     wait_loop_fc74:
     subs    r5, r5, #1
     bne     wait_loop_fc74
-
+#ifdef DEBUG_FC74_REG
+    vstr     reg_one_s1,[r11,ODR]  // PA0 high
+#endif
+    wfe
+    wfe
     // 2. Read PD15–8 from GPIOD->IDR
     ldr     r1, [r2, #0x10]            // Load GPIOD->IDR
     lsrs    r1, r1, #8                 // Shift PD15–8 down to bits 7–0
     // below to manually send an a
     //movs    r1, #'c'                   // 0x41
-
     // 3. Send via USART1 (base = 0x40011000)
     ldr     r3, =0x40011000
-
+#ifdef DEBUG_FC74_REG
+    vstr     reg_zero_s0,[r11,ODR]  // PA0 low
+#endif
 wait_txe_fc74:
     ldr     r0, [r3, #0x00]            // USART1->SR
     tst     r0, #0x80                  // USART_SR_TXE
     beq     wait_txe_fc74
 
     strb    r1, [r3, #0x04]            // USART1->DR = r1
+    
+    // --- Clear busy flag ---
+    movs    r0, #0
+    strb    r0, [r4]
 
     bx      lr
-#ifdef DEBUG_FC74_REG
-    vstr     reg_zero_s0,[r11,ODR]  // PA0 low
-#endif
+
+skip_fc74:
+
+    bx      lr
+
